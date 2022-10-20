@@ -2,7 +2,8 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
-
+#include <iostream>
+#include <vector>
 /*
  * TaskSystemSerial: This class is the student's implementation of a
  * serial task execution engine.  See definition of ITaskSystem in
@@ -43,6 +44,9 @@ class TaskSystemParallelSpawn: public ITaskSystem {
  * documentation of the ITaskSystem interface.
  */
 class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
+    protected:
+        int next_work_item = -1;
+        std::mutex mutex;
     public:
         TaskSystemParallelThreadPoolSpinning(int num_threads);
         ~TaskSystemParallelThreadPoolSpinning();

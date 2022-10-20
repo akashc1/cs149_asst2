@@ -1,6 +1,8 @@
 #ifndef _ITASKSYS_H
 #define _ITASKSYS_H
 #include <vector>
+#include <thread>
+#include <mutex>
 
 typedef int TaskID;
 
@@ -10,10 +12,8 @@ class IRunnable {
 
         /*
           Executes an instance of the task as part of a bulk task launch.
-          
            - task_id: the current task identifier. This value will be
               between 0 and num_total_tasks-1.
-              
            - num_total_tasks: the total number of tasks in the bulk
              task launch.
          */
@@ -21,6 +21,9 @@ class IRunnable {
 };
 
 class ITaskSystem {
+    protected:
+        int num_threads;
+        std::vector<std::thread> threadpool;
     public:
         /*
           Instantiates a task system.
