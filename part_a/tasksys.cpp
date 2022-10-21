@@ -60,7 +60,6 @@ void thread_run_queue(IRunnable* runnable, int num_total_tasks, int* work_counte
     }
 }
 
-
 const char* TaskSystemParallelSpawn::name() {
     return "Parallel + Always Spawn";
 }
@@ -100,27 +99,98 @@ void TaskSystemParallelSpawn::sync() {
  * ================================================================
  */
 
+void workload_loop(IRunnable* runnable, int num_total_tasks, int* work_counter, std::mutex* m) {
+    int work_idx;
+    while (true) {
+        m->lock();
+        work_idx = ++(*work_counter);
+        m->unlock();
+        if (work_idx >= num_total_tasks) {
+            return;
+        }
+        runnable->runTask(work_idx, num_total_tasks);
+    }
+}
+
+void thread_run_queue_spin(IRunnable** runnable, int* num_total_tasks,
+        std::mutex* sync_m, int* work_counter,
+        std::mutex* start_m, bool* finished,
+        std::mutex* wait_mutex, int* waiting_threads) {
+
+    bool _all_done = true;
+    while (true) {
+        start_m->lock();
+        _all_done  = *finished;
+        start_m->unlock();
+
+        if (_all_done) {
+            wait_mutex->lock();
+            (*waiting_threads)--;
+            wait_mutex->unlock();
+            return;
+        }
+
+        int first_work_idx;
+        sync_m->lock();
+        first_work_idx = *work_counter;
+        sync_m->unlock();
+        if (first_work_idx != -1 && first_work_idx < *num_total_tasks) {
+            workload_loop(*runnable, *num_total_tasks, work_counter, sync_m);
+        }
+    }
+}
+
 const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
 
-TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads),
+    waiting_threads(num_threads) {
     threadpool = std::vector<std::thread>(num_threads);
+    start_mutex.lock();
+    for (int i = 0; i < num_threads; i++) {
+        threadpool[i] = std::thread(thread_run_queue_spin,
+                &tasks, &num_tasks,
+                &sync_mutex, &next_work_item,
+                &start_mutex, &finished,
+                &waiting_mutex, &waiting_threads);
+    }
 }
 
-TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
+TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
+    // indicate to threads that we're ready to terminate
+    // here, we already have `start_mutex` locked
+    finished = true;
+    start_mutex.unlock();
 
-void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
+    // wait for threads to acknowledge termination flag
+    while (waiting_threads > 0) {}
 
-    for (int i = 0; i < num_threads; i++) {
-        threadpool[i] = std::thread(thread_run_queue, runnable, num_total_tasks, &next_work_item, &mutex);
-    }
-
-    // Join threads
     for (int i = 0; i < num_threads; i++) {
         threadpool[i].join();
     }
+}
+
+void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
+    // set values that all threads are watching via pointers to these
+    tasks = runnable;
+    num_tasks = num_total_tasks;
+    finished = false;
     next_work_item = -1;
+    start_mutex.unlock();  // let threads begin work on this
+
+    // check if we've completed all items
+    int counter;
+    while (true) {
+        sync_mutex.lock();
+        counter = next_work_item;
+        sync_mutex.unlock();
+        if (counter >= num_total_tasks) {
+            break;
+        }
+    }
+
+    start_mutex.lock();
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

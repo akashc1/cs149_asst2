@@ -45,8 +45,21 @@ class TaskSystemParallelSpawn: public ITaskSystem {
  */
 class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
     protected:
+        // synchronize next index from tasks to work on
+        std::mutex sync_mutex;
         int next_work_item = -1;
-        std::mutex mutex;
+
+        // synchronize when we've finished all work for this object
+        std::mutex start_mutex;
+        bool finished = false;
+
+        // synchronize when threads acknowledge that we're done working
+        std::mutex waiting_mutex;
+        int waiting_threads = -1;
+
+        // actual tasks & count to work on for a singular call to run()
+        IRunnable* tasks;
+        int num_tasks;
     public:
         TaskSystemParallelThreadPoolSpinning(int num_threads);
         ~TaskSystemParallelThreadPoolSpinning();
