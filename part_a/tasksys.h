@@ -49,6 +49,10 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         std::mutex sync_mutex;
         int next_work_item = -1;
 
+        // synchornize index of last completed item
+        std::mutex done_mutex;
+        int num_done_items = -1;
+
         // synchronize when we've finished all work for this object
         std::mutex start_mutex;
         bool finished = false;
