@@ -4,6 +4,8 @@
 #include "itasksys.h"
 #include <iostream>
 #include <vector>
+#include <condition_variable>
+
 /*
  * TaskSystemSerial: This class is the student's implementation of a
  * serial task execution engine.  See definition of ITaskSystem in
@@ -38,6 +40,35 @@ class TaskSystemParallelSpawn: public ITaskSystem {
 };
 
 /*
+ * LockedCounter: counter protected by a mutex for safe writes/reads.
+ * */
+class LockedCounter {
+    public:
+        /* LockedCounter(); */
+        /* ~LockedCounter(); */
+
+        int get_incremented_count();
+        int get_count();
+        void increment();
+        void set_value(int val);
+
+    private:
+        std::mutex m;
+        int counter = 0;
+};
+
+class LockedFlag {
+    public:
+        void set_true();
+        void set_false();
+        bool value();
+
+    private:
+        std::mutex m;
+        bool flag = false;
+};
+
+/*
  * TaskSystemParallelThreadPoolSpinning: This class is the student's
  * implementation of a parallel task execution engine that uses a
  * thread pool. See definition of ITaskSystem in itasksys.h for
@@ -45,21 +76,28 @@ class TaskSystemParallelSpawn: public ITaskSystem {
  */
 class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
     protected:
-        // synchronize next index from tasks to work on
-        std::mutex sync_mutex;
-        int next_work_item = -1;
+        /* // synchronize next index from tasks to work on */
+        /* LockedCounter next_work_counter; */
+        /* // synchronize on index of last completed item */
+        /* LockedCounter done_work_counter; */
+        /* // synchronize on which threads have acknowledge termination */
+        /* LockedCounter sync_counter; */
+        /* // synchornize on whether we should stop checking for more work to do */
+        /* LockedFlag terminate_flag; */
 
-        // synchronize when we've finished all work for this object
-        std::mutex start_mutex;
-        bool finished = false;
+        /* int next_work_item; */
+        /* int completed_work_count; */
+        /* bool terminate = false; */
 
-        // synchronize when threads acknowledge that we're done working
-        std::mutex waiting_mutex;
-        int waiting_threads = -1;
+        /* // synchronize when we should pause/resume working on some work */
+        /* std::mutex work_lock; */
+        /* std::mutex completed_lock; */
+        /* std::mutex continue_mutex; */
 
         // actual tasks & count to work on for a singular call to run()
         IRunnable* tasks;
         int num_tasks;
+
     public:
         TaskSystemParallelThreadPoolSpinning(int num_threads);
         ~TaskSystemParallelThreadPoolSpinning();
@@ -77,6 +115,25 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  * itasksys.h for documentation of the ITaskSystem interface.
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
+    private:
+        // manage which tasks to work on
+        IRunnable* tasks;
+        int num_tasks;
+
+        // manage sleeping/waking behavior
+        std::condition_variable _cv;
+        std::mutex _m;
+        int ack_count;
+
+        // manage which item each thread should work on next, and checking for completion
+        int next_work_item = 0;
+        int num_completed_items = 0;
+        std::mutex next_item_lock;
+        std::mutex last_done_lock;
+
+        // manage global state of whether we can tear down the queue
+        bool terminate = false;
+
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();
