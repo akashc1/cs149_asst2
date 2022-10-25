@@ -1,4 +1,5 @@
 #include "tasksys.h"
+#include <condition_variable>
 
 IRunnable::~IRunnable() {}
 
@@ -203,40 +204,125 @@ void TaskSystemParallelThreadPoolSpinning::sync() {
  * ================================================================
  */
 
+void workload_loop(IRunnable** runnable, int* num_total_tasks,
+        std::mutex* sync_m, int* work_counter,
+        std::mutex* done_m, int* done_counter) {
+
+    int next_work_idx;
+    sync_m->lock();
+    while (*work_counter >= 0 && *work_counter < *num_total_tasks) {
+        next_work_idx = (*work_counter)++;
+        sync_m->unlock();
+
+        (*runnable)->runTask(next_work_idx, *num_total_tasks);
+        done_m->lock();
+        (*done_counter)++;
+        done_m->unlock();
+
+        sync_m->lock();
+    }
+    sync_m->unlock();
+}
+
+void thread_work_sleep(int thread_id, IRunnable** runnable, int* num_tasks,
+        std::mutex* sync_m, int* work_counter,
+        std::mutex* done_m, int* done_counter,
+        std::mutex* continue_mutex, std::condition_variable* cv, int* ack_counter,
+        std::mutex* waiting_mutex, bool* finish, int* waiting_threads) {
+
+    while (true) {
+
+        // wait until we're told we should continue
+        std::unique_lock<std::mutex> ul(*continue_mutex);
+        cv->wait(ul);
+        (*ack_counter)++;
+        ul.unlock();
+
+        // exit condition
+        if (*finish) {
+            waiting_mutex->lock();
+            (*waiting_threads)++;
+            waiting_mutex->unlock();
+            return;
+        }
+
+        // check if we should do work or not
+        sync_m->lock();
+        if ((*work_counter >= 0) && (*work_counter < *num_tasks)) {
+            sync_m->unlock();
+            workload_loop(runnable, num_tasks, sync_m, work_counter, done_m, done_counter);
+        }
+        else {
+            sync_m->unlock();
+        }
+    }
+}
+
 const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
 TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
-    //
-    // TODO: CS149 student implementations may decide to perform setup
-    // operations (such as thread pool construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    threadpool = std::vector<std::thread>(num_threads);
+    continue_mutex.lock();
+    for (int i = 0; i < num_threads; i++) {
+        threadpool[i] = std::thread(thread_work_sleep,
+                i, &tasks, &num_tasks,
+                &sync_mutex, &next_work_item,
+                &done_mutex, &num_done_items,
+                &continue_mutex, &cnt, &ack_counter,
+                &waiting_mutex, &finished, &waiting_threads);
+    }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    //
-    // TODO: CS149 student implementations may decide to perform cleanup
-    // operations (such as thread pool shutdown construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    finished = true;
+
+    ack_counter = 0;
+    waiting_threads = 0;
+
+    while (ack_counter < num_threads) {
+        continue_mutex.unlock();
+        cnt.notify_all();
+        continue_mutex.lock();
+    }
+
+    waiting_mutex.lock();
+    while (waiting_threads < num_threads) {
+        waiting_mutex.unlock();
+        waiting_mutex.lock();
+    }
+    waiting_mutex.unlock();
+
+    for (int i = 0; i < num_threads; i++) {
+        threadpool[i].join();
+    }
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
 
+    tasks = runnable;
+    num_tasks = num_total_tasks;
 
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Parts A and B.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
+    next_work_item = 0;
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    num_done_items = 0;
+    ack_counter = 0;
+
+    // we already have continue_mutex locked here
+    while (ack_counter < num_threads) {
+        continue_mutex.unlock();
+        cnt.notify_all();
+        continue_mutex.lock();
     }
+
+    done_mutex.lock();
+    while (num_done_items < num_tasks) {
+        done_mutex.unlock();
+        done_mutex.lock();
+    }
+    done_mutex.unlock();
+    next_work_item = -1;
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

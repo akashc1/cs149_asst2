@@ -4,6 +4,7 @@
 #include "itasksys.h"
 #include <iostream>
 #include <vector>
+#include <condition_variable>
 /*
  * TaskSystemSerial: This class is the student's implementation of a
  * serial task execution engine.  See definition of ITaskSystem in
@@ -81,6 +82,29 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  * itasksys.h for documentation of the ITaskSystem interface.
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
+    private:
+        // synchronize next index from tasks to work on
+        std::mutex sync_mutex;
+        int next_work_item = -1;
+
+        // synchornize index of last completed item
+        std::mutex done_mutex;
+        int num_done_items = -1;
+
+        // synchronize when we've finished all work for this object
+        std::mutex continue_mutex;
+        std::condition_variable cnt;
+        int ack_counter;
+        bool finished = false;
+
+        // synchronize when threads acknowledge that we're done working
+        std::mutex waiting_mutex;
+        int waiting_threads = -1;
+
+        // actual tasks & count to work on for a singular call to run()
+        IRunnable* tasks;
+        int num_tasks;
+
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();
