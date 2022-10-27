@@ -2,6 +2,7 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <atomic>
 #include <thread>
 #include <mutex>
 #include <deque>
@@ -81,7 +82,7 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::deque<int> blocked_q;
         std::deque<int> ready_q;
 
-        int num_sleeping = 0;
+        std::atomic<int> num_sleeping;
         bool finished = false;
 
         void work_from_queue(int thread_id);
