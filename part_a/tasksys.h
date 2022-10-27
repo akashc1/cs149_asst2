@@ -101,6 +101,10 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::mutex waiting_mutex;
         int waiting_threads = -1;
 
+        std::mutex master_sleep_mutex;
+        std::condition_variable master_sleep;
+        bool master_awake;
+
         // actual tasks & count to work on for a singular call to run()
         IRunnable* tasks;
         int num_tasks;

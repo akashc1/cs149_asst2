@@ -228,25 +228,27 @@ void thread_work_sleep(int thread_id, IRunnable** runnable, int* num_tasks,
         std::mutex* sync_m, int* work_counter,
         std::mutex* done_m, int* done_counter,
         std::mutex* continue_mutex, std::condition_variable* cv, int* ack_counter,
-        std::mutex* waiting_mutex, bool* finish, int* waiting_threads) {
+        std::mutex* waiting_mutex, bool* finish, int* waiting_threads,
+        std::condition_variable* master_sleep,
+        std::mutex* master_sleep_mutex, bool* master_awake) {
 
     while (true) {
 
         // wait until we're told we should continue
         std::unique_lock<std::mutex> ul(*continue_mutex);
+        printf("[%d] Going to sleep until we are woken up\n", thread_id);
         cv->wait(ul);
         (*ack_counter)++;
+        printf("[%d] Woken up, ack_counter=%d\n", thread_id, *ack_counter);
         ul.unlock();
 
         // exit condition
         if (*finish) {
-            waiting_mutex->lock();
-            (*waiting_threads)++;
-            waiting_mutex->unlock();
             return;
         }
 
         // check if we should do work or not
+        printf("[%d] Waiting for sync_mutex\n", thread_id);
         sync_m->lock();
         if ((*work_counter >= 0) && (*work_counter < *num_tasks)) {
             sync_m->unlock();
@@ -254,6 +256,18 @@ void thread_work_sleep(int thread_id, IRunnable** runnable, int* num_tasks,
         }
         else {
             sync_m->unlock();
+        }
+
+        // Wake up master thread
+        if (thread_id == 0) {
+            master_sleep_mutex->lock();
+            while (!*master_awake) {
+                master_sleep_mutex->unlock();
+                master_sleep->notify_one();
+                master_sleep_mutex->lock();
+            }
+            master_sleep_mutex->unlock();
+            printf("[%d] Successfully woke up master\n", thread_id);
         }
     }
 }
@@ -271,11 +285,13 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
                 &sync_mutex, &next_work_item,
                 &done_mutex, &num_done_items,
                 &continue_mutex, &cnt, &ack_counter,
-                &waiting_mutex, &finished, &waiting_threads);
+                &waiting_mutex, &finished, &waiting_threads,
+                &master_sleep, &master_sleep_mutex, &master_awake);
     }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
+    printf("Calling destructor!\n");
     finished = true;
 
     ack_counter = 0;
@@ -287,13 +303,6 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
         continue_mutex.lock();
     }
 
-    waiting_mutex.lock();
-    while (waiting_threads < num_threads) {
-        waiting_mutex.unlock();
-        waiting_mutex.lock();
-    }
-    waiting_mutex.unlock();
-
     for (int i = 0; i < num_threads; i++) {
         threadpool[i].join();
     }
@@ -301,20 +310,33 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
 
+    printf("[MASTER] Start run()\n");
     tasks = runnable;
+
+    sync_mutex.lock();
     num_tasks = num_total_tasks;
-
     next_work_item = 0;
-
     num_done_items = 0;
     ack_counter = 0;
 
     // we already have continue_mutex locked here
+    printf("[MASTER] Waking up all threads\n");
     while (ack_counter < num_threads) {
         continue_mutex.unlock();
         cnt.notify_all();
         continue_mutex.lock();
     }
+    printf("[MASTER] All threads have acknowledged being awake\n");
+    sync_mutex.unlock();
+
+    // Go to sleep and wait to be notified by a thread that's completed its iteration
+    std::unique_lock<std::mutex> master_lock(master_sleep_mutex);
+    printf("[MASTER] Going to sleep until woken up by a thread\n");
+    master_awake = false;
+    master_sleep.wait(master_lock);
+    master_awake = true;
+    printf("[MASTER] Woken up\n");
+    master_lock.unlock();
 
     done_mutex.lock();
     while (num_done_items < num_tasks) {
@@ -323,6 +345,8 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     }
     done_mutex.unlock();
     next_work_item = -1;
+    printf("[MASTER] Finishing call to run()\n");
+    master_awake = false;
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
