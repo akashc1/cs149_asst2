@@ -130,8 +130,7 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     threadpool = std::vector<std::thread>(num_threads);
     num_sleeping = 0;
     for (int i = 0; i < num_threads; i++) {
-        threadpool[i] = std::thread(
-                &TaskSystemParallelThreadPoolSleeping::work_from_queue, this, i);
+        threadpool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::work_from_queue, this);
     }
 }
 
@@ -149,7 +148,6 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-
     std::vector<TaskID> nodep;
     runAsyncWithDeps(runnable, num_total_tasks, nodep);
     sync();
@@ -161,11 +159,6 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     queue_lock.lock();
     TaskID new_task_id = _runnables.size();
 
-    // wake up any sleeping threads so they can work on newly pushed things
-    if (num_sleeping) {
-        cv.notify_all();
-    }
-
     _runnables.push_back(runnable);
     _all_num_tasks.push_back(num_total_tasks);
     _deps.push_back(deps);
@@ -173,52 +166,43 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     done_count.push_back(0);
 
     // if the task has no dependencies it's already ready to go
-    /* if (deps.size() == 0) { */
-    /*     ready_q.push_back(new_task_id); */
-    /*     /1* printf("[MASTER] Pushing task_id=%d to the ready queue, no deps\n", new_task_id); *1/ */
-    /* } else { */
-    /*     // assume it's blocked (although it's possible the dependencies are already satisfied */
-    /*     blocked_q.push_back(new_task_id); */
-    /*     /1* printf("[MASTER] Pushing task_id=%d to the blocked queue\n", new_task_id); *1/ */
-    /* } */
-    blocked_q.push_back(new_task_id);
+    if (deps.empty()) {
+        ready_q.push_back(new_task_id);
+    } else {
+        // assume it's blocked (although it's possible the dependencies are already satisfied)
+        blocked_q.push_back(new_task_id);
+    }
 
-
+    // wake up any sleeping threads so they can work on newly pushed things
+    if (num_sleeping) {
+        cv.notify_all();
+    }
     queue_lock.unlock();
 
     return new_task_id;
 }
 
-void TaskSystemParallelThreadPoolSleeping::work_from_queue(int thread_id) {
+void TaskSystemParallelThreadPoolSleeping::work_from_queue() {
     int tid, item_num;
     std::unique_lock<std::mutex> ul(queue_lock);
     ul.unlock();
     while (true) {
+        // we're done, exit
         queue_lock.lock();
         if (finished) {
             queue_lock.unlock();
             return;
         }
 
-        if (ready_q.empty() && blocked_q.empty()) {
-            // Both queues are empty, we can sleep until woken up at some point in the future
-            // indicate that we're gonna go to sleep
-            /* printf("[%d] Gonna go to sleep...\n", thread_id); */
-            num_sleeping++;
-            cv.wait(ul);
-            num_sleeping--;
-            queue_lock.unlock();
-            continue;
-        }
-
+        // We have items that we can immediately work on
         if (!ready_q.empty()) {
             // get next ready task x item tuple
             tid = ready_q.front();
             item_num = next_item[tid]++;
 
             // remove this task from the queue if we're about to work on the last item from it
-            if (next_item[tid] == _all_num_tasks[tid]) {
-                ready_q.erase(ready_q.begin());
+            if (item_num == _all_num_tasks[tid] - 1) {
+                ready_q.pop_front();
             }
             queue_lock.unlock();
 
@@ -229,29 +213,38 @@ void TaskSystemParallelThreadPoolSleeping::work_from_queue(int thread_id) {
             queue_lock.lock();
             done_count[tid]++;
             queue_lock.unlock();
-            /* printf("[%d] Finished an item from task %d\n", thread_id, tid); */
 
-        } else {
+        } else if (!blocked_q.empty()){
             // Here, all tasks in the queue are blocked due to dependencies. So we should
             // try to move items that have satisfied dependencies to the unblocked queue.
-            /* printf("[%d] Gonna try to rearrange tasks in queues\n", thread_id); */
-            for (int i = 0; i < (int) blocked_q.size(); i++) {
+            for (unsigned int i = 0; i < blocked_q.size(); i++) {
                 int blocked_tid = blocked_q[i];
 
+                // check if this item's all unblocked
                 bool all_deps_satisfied = true;
                 for (unsigned int j = 0; j < _deps[blocked_tid].size(); j++) {
-                    if (done_count[_deps[blocked_tid][j]] != _all_num_tasks[_deps[blocked_tid][j]]) {
+                    int depid = _deps[blocked_tid][j];
+                    if (done_count[depid] != _all_num_tasks[depid]) {
                         all_deps_satisfied = false;
                         break;
                     }
                 }
 
+                // move from blocked queue to the ready queue
                 if (all_deps_satisfied) {
                     ready_q.push_back(blocked_tid);
                     blocked_q.erase(blocked_q.begin() + i);
-                    i--;
+                    i--;  // push back iterator since erase moves items in the queue
                 }
             }
+
+            queue_lock.unlock();
+        } else {
+            // Both queues are empty, we can sleep until woken up at some point in the future
+            // indicate that we're gonna go to sleep
+            num_sleeping++;
+            cv.wait(ul);
+            num_sleeping--;
             queue_lock.unlock();
         }
     }

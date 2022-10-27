@@ -85,7 +85,7 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::atomic<int> num_sleeping;
         bool finished = false;
 
-        void work_from_queue(int thread_id);
+        void work_from_queue();
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();
