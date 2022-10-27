@@ -1,5 +1,4 @@
 #include "tasksys.h"
-#include <condition_variable>
 
 IRunnable::~IRunnable() {}
 
@@ -204,149 +203,85 @@ void TaskSystemParallelThreadPoolSpinning::sync() {
  * ================================================================
  */
 
-void workload_loop(IRunnable** runnable, int* num_total_tasks,
-        std::mutex* sync_m, int* work_counter,
-        std::mutex* done_m, int* done_counter) {
-
-    int next_work_idx;
-    sync_m->lock();
-    while (*work_counter >= 0 && *work_counter < *num_total_tasks) {
-        next_work_idx = (*work_counter)++;
-        sync_m->unlock();
-
-        (*runnable)->runTask(next_work_idx, *num_total_tasks);
-        done_m->lock();
-        (*done_counter)++;
-        done_m->unlock();
-
-        sync_m->lock();
-    }
-    sync_m->unlock();
-}
-
-void thread_work_sleep(int thread_id, IRunnable** runnable, int* num_tasks,
-        std::mutex* sync_m, int* work_counter,
-        std::mutex* done_m, int* done_counter,
-        std::mutex* continue_mutex, std::condition_variable* cv, int* ack_counter,
-        std::mutex* waiting_mutex, bool* finish, int* waiting_threads,
-        std::condition_variable* master_sleep,
-        std::mutex* master_sleep_mutex, bool* master_awake) {
-
-    while (true) {
-
-        // wait until we're told we should continue
-        std::unique_lock<std::mutex> ul(*continue_mutex);
-        printf("[%d] Going to sleep until we are woken up\n", thread_id);
-        cv->wait(ul);
-        (*ack_counter)++;
-        printf("[%d] Woken up, ack_counter=%d\n", thread_id, *ack_counter);
-        ul.unlock();
-
-        // exit condition
-        if (*finish) {
-            return;
-        }
-
-        // check if we should do work or not
-        printf("[%d] Waiting for sync_mutex\n", thread_id);
-        sync_m->lock();
-        if ((*work_counter >= 0) && (*work_counter < *num_tasks)) {
-            sync_m->unlock();
-            workload_loop(runnable, num_tasks, sync_m, work_counter, done_m, done_counter);
-        }
-        else {
-            sync_m->unlock();
-        }
-
-        // Wake up master thread
-        if (thread_id == 0) {
-            master_sleep_mutex->lock();
-            while (!*master_awake) {
-                master_sleep_mutex->unlock();
-                master_sleep->notify_one();
-                master_sleep_mutex->lock();
-            }
-            master_sleep_mutex->unlock();
-            printf("[%d] Successfully woke up master\n", thread_id);
-        }
-    }
-}
-
 const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
 TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
+    next_work_id = 0;
+    num_tasks = 0;  // skip immediately working
+    num_waiting_threads = 0;
     threadpool = std::vector<std::thread>(num_threads);
-    continue_mutex.lock();
     for (int i = 0; i < num_threads; i++) {
-        threadpool[i] = std::thread(thread_work_sleep,
-                i, &tasks, &num_tasks,
-                &sync_mutex, &next_work_item,
-                &done_mutex, &num_done_items,
-                &continue_mutex, &cnt, &ack_counter,
-                &waiting_mutex, &finished, &waiting_threads,
-                &master_sleep, &master_sleep_mutex, &master_awake);
+        threadpool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::run_sleeping, this, i);
+    }
+
+    // wait until all threads have acknowledged waiting
+    while (num_waiting_threads < num_threads) {
     }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    printf("Calling destructor!\n");
-    finished = true;
-
-    ack_counter = 0;
-    waiting_threads = 0;
-
-    while (ack_counter < num_threads) {
-        continue_mutex.unlock();
-        cnt.notify_all();
-        continue_mutex.lock();
-    }
-
+    finished = true;  // set exit condition
+    cv.notify_all();
     for (int i = 0; i < num_threads; i++) {
         threadpool[i].join();
     }
 }
 
+void TaskSystemParallelThreadPoolSleeping::run_sleeping(int thread_id) {
+    int task;
+    std::unique_lock<std::mutex> ul(m);
+    ul.unlock();
+    while (true) {
+        // exit condition
+        if (finished) {
+            return;
+        }
+
+        m.lock();
+        // do work if there is some to do
+        if (next_work_id < num_tasks) {
+            task = next_work_id++;
+            m.unlock();
+            tasks->runTask(task, num_tasks);
+        } else {
+            // indicate that we're waiting, notify main thread, and go to sleep
+            num_waiting_threads++;
+            master_mutex.lock();
+            master_cv.notify_one();
+            master_mutex.unlock();
+            cv.wait(ul);  // TODO: why does this not result in deadlock if we have m locked here?
+            m.unlock();
+        }
+    }
+}
+
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
 
-    printf("[MASTER] Start run()\n");
     tasks = runnable;
-
-    sync_mutex.lock();
+    m.lock();
+    next_work_id = 0;
     num_tasks = num_total_tasks;
-    next_work_item = 0;
-    num_done_items = 0;
-    ack_counter = 0;
+    num_waiting_threads = 0;
 
-    // we already have continue_mutex locked here
-    printf("[MASTER] Waking up all threads\n");
-    while (ack_counter < num_threads) {
-        continue_mutex.unlock();
-        cnt.notify_all();
-        continue_mutex.lock();
+    m.unlock();
+    cv.notify_all();
+    m.lock();
+
+    if (num_waiting_threads == 0) {
+        // all threads have work to do, so go to sleep until at least one thread is finished
+        std::unique_lock<std::mutex> ul(master_mutex);
+        m.unlock();
+        master_cv.wait(ul);  // TODO: Why does this work if we've already locked master_mutex?
+        ul.unlock();
+    } else {
+        m.unlock();
     }
-    printf("[MASTER] All threads have acknowledged being awake\n");
-    sync_mutex.unlock();
 
-    // Go to sleep and wait to be notified by a thread that's completed its iteration
-    std::unique_lock<std::mutex> master_lock(master_sleep_mutex);
-    printf("[MASTER] Going to sleep until woken up by a thread\n");
-    master_awake = false;
-    master_sleep.wait(master_lock);
-    master_awake = true;
-    printf("[MASTER] Woken up\n");
-    master_lock.unlock();
-
-    done_mutex.lock();
-    while (num_done_items < num_tasks) {
-        done_mutex.unlock();
-        done_mutex.lock();
+    // wait for all threads to finish
+    while (num_waiting_threads < num_threads) {
     }
-    done_mutex.unlock();
-    next_work_item = -1;
-    printf("[MASTER] Finishing call to run()\n");
-    master_awake = false;
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,

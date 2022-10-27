@@ -2,6 +2,7 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <atomic>
 #include <iostream>
 #include <vector>
 #include <condition_variable>
@@ -83,31 +84,28 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     private:
-        // synchronize next index from tasks to work on
-        std::mutex sync_mutex;
-        int next_work_item = -1;
+        // synchronize on the next item to work on
+        std::mutex m;
+        int next_work_id;
 
-        // synchornize index of last completed item
-        std::mutex done_mutex;
-        int num_done_items = -1;
+        // synchronize when threads are waiting/sleeping
+        std::vector<std::thread> threadpool;
+        std::atomic<int> num_waiting_threads;
+        std::condition_variable cv;
 
-        // synchronize when we've finished all work for this object
-        std::mutex continue_mutex;
-        std::condition_variable cnt;
-        int ack_counter;
-        bool finished = false;
+        // sychronize on master sleeping
+        std::mutex master_mutex;
+        std::condition_variable master_cv;
 
-        // synchronize when threads acknowledge that we're done working
-        std::mutex waiting_mutex;
-        int waiting_threads = -1;
-
-        std::mutex master_sleep_mutex;
-        std::condition_variable master_sleep;
-        bool master_awake;
-
-        // actual tasks & count to work on for a singular call to run()
+        // state of task queue
         IRunnable* tasks;
         int num_tasks;
+
+        // exit flag
+        bool finished = false;
+
+        // main thread worker loop
+        void run_sleeping(int thread_id);
 
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
