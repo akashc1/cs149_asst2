@@ -66,6 +66,9 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     private:
+        int num_threads;
+        std::vector<std::thread> threadpool;
+
         int next_task_id = -1;
 
         std::vector<IRunnable*> _runnables;
@@ -74,8 +77,6 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
 
         std::vector<int> next_item;
         std::vector<int> done_count;
-
-        std::vector<std::thread> threadpool;
 
         std::mutex queue_lock;
         std::condition_variable cv;

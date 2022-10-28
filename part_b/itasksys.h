@@ -21,8 +21,6 @@ class IRunnable {
 };
 
 class ITaskSystem {
-    protected:
-        int num_threads;
     public:
         /*
           Instantiates a task system.

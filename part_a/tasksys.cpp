@@ -2,7 +2,7 @@
 
 IRunnable::~IRunnable() {}
 
-ITaskSystem::ITaskSystem(int num_threads) : num_threads(num_threads) {}
+ITaskSystem::ITaskSystem(int num_threads) {}
 ITaskSystem::~ITaskSystem() {}
 
 /*
@@ -64,7 +64,7 @@ const char* TaskSystemParallelSpawn::name() {
     return "Parallel + Always Spawn";
 }
 
-TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads), num_threads(num_threads) {
     threadpool = std::vector<std::thread>(num_threads);
 }
 
@@ -137,8 +137,11 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
     return "Parallel + Thread Pool + Spin";
 }
 
-TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads),
-    waiting_threads(num_threads) {
+TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(
+    int num_threads)
+    : ITaskSystem(num_threads),
+      num_threads(num_threads),
+      waiting_threads(num_threads) {
     threadpool = std::vector<std::thread>(num_threads);
     next_work_item = -1;
     for (int i = 0; i < num_threads; i++) {
@@ -207,7 +210,9 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(
+    int num_threads)
+    : ITaskSystem(num_threads), num_threads(num_threads) {
     next_work_id = 0;
     num_tasks = 0;  // skip immediately working
     num_waiting_threads = 0;

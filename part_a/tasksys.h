@@ -2,6 +2,7 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <thread>
 #include <atomic>
 #include <iostream>
 #include <vector>
@@ -29,6 +30,9 @@ class TaskSystemSerial: public ITaskSystem {
  * of the ITaskSystem interface.
  */
 class TaskSystemParallelSpawn: public ITaskSystem {
+    private:
+        int num_threads;
+        std::vector<std::thread> threadpool;
     public:
         TaskSystemParallelSpawn(int num_threads);
         ~TaskSystemParallelSpawn();
@@ -46,6 +50,9 @@ class TaskSystemParallelSpawn: public ITaskSystem {
  * documentation of the ITaskSystem interface.
  */
 class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
+    private:
+        int num_threads;
+        std::vector<std::thread> threadpool;
     protected:
         // synchronize next index from tasks to work on
         std::mutex sync_mutex;
@@ -84,12 +91,14 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     private:
+        int num_threads;
+        std::vector<std::thread> threadpool;
+        //
         // synchronize on the next item to work on
         std::mutex m;
         int next_work_id;
 
         // synchronize when threads are waiting/sleeping
-        std::vector<std::thread> threadpool;
         std::atomic<int> num_waiting_threads;
         std::condition_variable cv;
 

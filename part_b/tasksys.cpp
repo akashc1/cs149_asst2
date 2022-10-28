@@ -3,7 +3,7 @@
 
 IRunnable::~IRunnable() {}
 
-ITaskSystem::ITaskSystem(int num_threads): num_threads(num_threads) {}
+ITaskSystem::ITaskSystem(int num_threads) {}
 ITaskSystem::~ITaskSystem() {}
 
 /*
@@ -126,7 +126,7 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads), num_threads(num_threads) {
     threadpool = std::vector<std::thread>(num_threads);
     num_sleeping = 0;
     for (int i = 0; i < num_threads; i++) {
